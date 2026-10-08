@@ -3,17 +3,24 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	appie "github.com/gwillem/appie-go"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+// version is set at build time: -ldflags "-X main.version=1.2.3"
+var version = "dev"
 
 var (
 	client     *appie.Client
@@ -52,9 +59,25 @@ func add(s *server.MCPServer, auth bool, h handler, name, desc string, opts ...m
 
 func main() {
 	// appie-go prints the login URL to stdout, which would corrupt the stdio
-	// protocol. Keep the real stdout for MCP and point fmt at stderr.
+	// protocol. Keep the real stdout for MCP and send anything fmt prints to
+	// stderr instead. appie-go only opens the browser itself on macOS/Linux, so
+	// on Windows we open the printed URL ourselves.
 	mcpOut := os.Stdout
-	os.Stdout = os.Stderr
+	if r, w, err := os.Pipe(); err == nil {
+		os.Stdout = w
+		go func() {
+			sc := bufio.NewScanner(r)
+			for sc.Scan() {
+				line := sc.Text()
+				fmt.Fprintln(os.Stderr, line)
+				if runtime.GOOS == "windows" && strings.HasPrefix(line, "http") {
+					_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", line).Start()
+				}
+			}
+		}()
+	} else {
+		os.Stdout = os.Stderr
+	}
 
 	cfg, err := os.UserConfigDir()
 	if err != nil {
@@ -72,7 +95,7 @@ func main() {
 		fatal(err)
 	}
 
-	s := server.NewMCPServer("Albert Heijn BE", "0.1.0")
+	s := server.NewMCPServer("Albert Heijn BE", version)
 	registerTools(s)
 
 	if err := server.NewStdioServer(s).Listen(context.Background(), os.Stdin, mcpOut); err != nil {

@@ -1,0 +1,36 @@
+{
+  "manifest_version": "0.3",
+  "name": "ah-be-mcp",
+  "display_name": "Albert Heijn Belgium",
+  "version": "__VERSION__",
+  "description": "Zoek producten, bekijk de bonus en beheer je winkelmandje op ah.be vanuit Claude.",
+  "long_description": "Onofficiële koppeling met ah.be. Zoek producten, bekijk de bonus, beheer je winkelmandje (ah.be/mijnlijst) en bekijk je bestellingen en kassabonnen. Producten zoeken werkt zonder account; voor je winkelmandje log je in op ah.be in je eigen browser. Je gegevens blijven op je eigen computer. Niet verbonden aan Albert Heijn.",
+  "author": { "name": "Frederik De Roover", "url": "https://github.com/FreDeRoover" },
+  "repository": { "type": "git", "url": "https://github.com/FreDeRoover/ah-be-mcp" },
+  "homepage": "https://github.com/FreDeRoover/ah-be-mcp",
+  "support": "https://github.com/FreDeRoover/ah-be-mcp/issues",
+  "license": "AGPL-3.0",
+  "keywords": ["albert heijn", "ah", "belgium", "groceries", "boodschappen"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/ah-be-mcp",
+    "mcp_config": { "command": "${__dirname}/server/ah-be-mcp", "args": [], "env": {} }
+  },
+  "tools": [
+    { "name": "ah_login", "description": "Log in op ah.be via je browser" },
+    { "name": "ah_logout", "description": "Vergeet de opgeslagen login" },
+    { "name": "ah_get_member", "description": "Je profiel en bonuskaart" },
+    { "name": "ah_search_products", "description": "Producten zoeken, eventueel alleen bonus" },
+    { "name": "ah_get_product", "description": "Details en voedingswaarden van een product" },
+    { "name": "ah_get_bonus", "description": "Huidige bonusaanbiedingen" },
+    { "name": "ah_get_bonus_group", "description": "Producten in een bonusgroep" },
+    { "name": "ah_get_cart", "description": "Je winkelmandje bekijken" },
+    { "name": "ah_set_cart_item", "description": "Product toevoegen of hoeveelheid wijzigen (0 verwijdert)" },
+    { "name": "ah_clear_cart", "description": "Winkelmandje leegmaken" },
+    { "name": "ah_get_orders", "description": "Geplande leveringen en afhalingen" },
+    { "name": "ah_get_order_details", "description": "Inhoud van een bestelling" },
+    { "name": "ah_get_receipts", "description": "Recente kassabonnen" },
+    { "name": "ah_get_receipt", "description": "Eén kassabon in detail" }
+  ],
+  "compatibility": { "platforms": ["__PLATFORM__"] }
+}
