@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,15 +33,23 @@ var (
 // handler returns any JSON-serialisable value; errors become tool errors.
 type handler func(ctx context.Context, req mcp.CallToolRequest) (any, error)
 
-// add registers a tool. auth=true means the user must be logged in; otherwise
-// an anonymous token is fetched on demand so browsing works without login.
-func add(s *server.MCPServer, auth bool, h handler, name, desc string, opts ...mcp.ToolOption) {
+// access says what a tool needs from the AH session.
+type access int
+
+const (
+	needNothing access = iota // does not call AH with a token
+	needAnon                  // browsing: an anonymous token is fetched on demand
+	needLogin                 // the user must be logged in
+)
+
+// add registers a tool with the given access level.
+func add(s *server.MCPServer, a access, h handler, name, desc string, opts ...mcp.ToolOption) {
 	opts = append([]mcp.ToolOption{mcp.WithDescription(desc)}, opts...)
 	s.AddTool(mcp.NewTool(name, opts...), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		if auth && (anonymous || !client.IsAuthenticated()) {
+		if a == needLogin && (anonymous || !client.IsAuthenticated()) {
 			return mcp.NewToolResultError("Not logged in. Call ah_login first."), nil
 		}
-		if !auth && !client.IsAuthenticated() {
+		if a == needAnon && !client.IsAuthenticated() {
 			if err := client.GetAnonymousToken(ctx); err != nil {
 				return mcp.NewToolResultError("anonymous token: " + err.Error()), nil
 			}
@@ -212,6 +222,72 @@ func productsOut(ps []appie.Product, err error) (any, error) {
 	return out, nil
 }
 
+// releaseURL is the GitHub API endpoint for the newest published release.
+var releaseURL = "https://api.github.com/repos/FreDeRoover/ah-be-mcp/releases/latest"
+
+// newer reports whether version a is higher than b, comparing dotted numbers
+// ("0.10.0" > "0.9.0"). Anything that isn't plain numbers counts as not newer.
+func newer(a, b string) bool {
+	parse := func(v string) []int {
+		var n []int
+		for _, p := range strings.Split(v, ".") {
+			x, err := strconv.Atoi(p)
+			if err != nil {
+				return nil
+			}
+			n = append(n, x)
+		}
+		return n
+	}
+	pa, pb := parse(a), parse(b)
+	if pa == nil || pb == nil {
+		return false
+	}
+	for i := 0; i < len(pa) && i < len(pb); i++ {
+		if pa[i] != pb[i] {
+			return pa[i] > pb[i]
+		}
+	}
+	return len(pa) > len(pb)
+}
+
+func checkUpdate(ctx context.Context) (any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", releaseURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("could not reach GitHub: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub answered %s", resp.Status)
+	}
+	var rel struct {
+		Tag string `json:"tag_name"`
+		URL string `json:"html_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, err
+	}
+	latest := strings.TrimPrefix(rel.Tag, "v")
+	out := map[string]any{"current_version": version, "latest_version": latest, "release_url": rel.URL, "update_available": false}
+	switch {
+	case version == "dev":
+		out["message"] = "This is a development build, so there is nothing to compare."
+	case newer(latest, version):
+		out["update_available"] = true
+		out["message"] = "A newer version is available. Download the .mcpb for your computer from release_url and double-click it. Your login is kept."
+	default:
+		out["message"] = "You are up to date."
+	}
+	return out, nil
+}
+
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "ah-mcp-be:", err)
 	os.Exit(1)
@@ -232,7 +308,7 @@ func registerTools(s *server.MCPServer) {
 	}
 
 	// --- auth ---
-	add(s, false, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	add(s, needNothing, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 		anonymous = false
@@ -243,7 +319,7 @@ func registerTools(s *server.MCPServer) {
 		return client.GetMember(ctx)
 	}, "ah_login", "Log in to ah.be. Opens a browser window on this machine and blocks until login completes (max 5 min).")
 
-	add(s, false, func(context.Context, mcp.CallToolRequest) (any, error) {
+	add(s, needNothing, func(context.Context, mcp.CallToolRequest) (any, error) {
 		client.Logout()
 		anonymous = false
 		if err := os.Remove(tokensPath); err != nil && !os.IsNotExist(err) {
@@ -252,12 +328,16 @@ func registerTools(s *server.MCPServer) {
 		return "logged out", nil
 	}, "ah_logout", "Forget stored tokens.")
 
-	add(s, true, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	add(s, needNothing, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+		return checkUpdate(ctx)
+	}, "ah_check_update", "Check whether a newer version of this server is available on GitHub. Does not install anything.")
+
+	add(s, needLogin, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		return client.GetMember(ctx)
 	}, "ah_get_member", "Member profile and bonus card.")
 
 	// --- products (work anonymously) ---
-	add(s, false, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needAnon, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		return productsOut(client.SearchProductsFiltered(ctx, appie.SearchOptions{
 			Query: r.GetString("query", ""),
 			Limit: r.GetInt("limit", 10),
@@ -268,7 +348,7 @@ func registerTools(s *server.MCPServer) {
 		num("limit", "Max results (default 10)", false),
 		mcp.WithBoolean("bonus_only", mcp.Description("Only products currently in bonus")))
 
-	add(s, false, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needAnon, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		id, err := r.RequireInt("product_id")
 		if err != nil {
 			return nil, err
@@ -281,16 +361,16 @@ func registerTools(s *server.MCPServer) {
 		num("product_id", "Product id from ah_search_products", true),
 		mcp.WithBoolean("nutrition", mcp.Description("Include nutritional info")))
 
-	add(s, false, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	add(s, needAnon, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		return productsOut(client.GetBonusProducts(ctx))
 	}, "ah_get_bonus", "Current bonus offers. Group entries carry a bonusSegmentId; expand with ah_get_bonus_group.")
 
-	add(s, false, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needAnon, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		return productsOut(client.GetBonusGroupProducts(ctx, r.GetString("segment_id", "")))
 	}, "ah_get_bonus_group", "Products in a bonus group.",
 		str("segment_id", "bonusSegmentId from ah_get_bonus", true))
 
-	add(s, false, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needAnon, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		ids := r.GetIntSlice("product_ids", nil)
 		if len(ids) == 0 || len(ids) > 20 {
 			return nil, fmt.Errorf("give 1 to 20 product_ids")
@@ -317,7 +397,7 @@ func registerTools(s *server.MCPServer) {
 		mcp.WithArray("product_ids", mcp.Required(), mcp.Description("Product ids"), mcp.WithNumberItems()),
 		mcp.WithBoolean("nutrition", mcp.Description("Include nutritional info")))
 
-	add(s, false, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	add(s, needAnon, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		periods, err := client.GetBonusPeriods(ctx)
 		out := make([]map[string]string, 0, len(periods))
 		for _, p := range periods {
@@ -326,13 +406,13 @@ func registerTools(s *server.MCPServer) {
 		return out, err
 	}, "ah_get_bonus_periods", "Bonus weeks: the current one and, a few days ahead, next week (start_date and end_date). Use a start date with ah_get_personal_bonus.")
 
-	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		return productsOut(client.GetPersonalBonus(ctx, r.GetString("start_date", "")))
 	}, "ah_get_personal_bonus", "Your personal bonus offers (Bonus Box) for the current week, or for the week starting at start_date.",
 		str("start_date", "Week start from ah_get_bonus_periods, e.g. 2026-10-12. Empty means the current week.", false))
 
 	// --- cart: on ah.be the "winkelmandje" (/mijnlijst) is the v2 shopping list ---
-	add(s, true, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		items, err := getCart(ctx)
 		if err != nil {
 			return nil, err
@@ -361,7 +441,7 @@ func registerTools(s *server.MCPServer) {
 		return map[string]any{"items": lines, "total_quantity": qty, "estimated_total": total}, nil
 	}, "ah_get_cart", "Your ah.be winkelmandje (ah.be/mijnlijst): products, quantities, prices and bonus.")
 
-	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		raw, _ := r.GetArguments()["items"].([]any)
 		if len(raw) == 0 {
 			return nil, fmt.Errorf("items is empty")
@@ -392,7 +472,7 @@ func registerTools(s *server.MCPServer) {
 			},
 		})))
 
-	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		if r.GetString("confirm", "") != "yes" {
 			return nil, fmt.Errorf("pass confirm=yes to empty the winkelmandje")
 		}
@@ -414,11 +494,11 @@ func registerTools(s *server.MCPServer) {
 		str("confirm", "Must be 'yes'", true))
 
 	// --- orders & receipts ---
-	add(s, true, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		return client.GetFulfillments(ctx)
 	}, "ah_get_orders", "Scheduled deliveries / pickups.")
 
-	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		id, err := r.RequireInt("order_id")
 		if err != nil {
 			return nil, err
@@ -427,11 +507,11 @@ func registerTools(s *server.MCPServer) {
 	}, "ah_get_order_details", "Items of a specific order.",
 		num("order_id", "Order id from ah_get_orders", true))
 
-	add(s, true, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		return client.GetReceipts(ctx)
 	}, "ah_get_receipts", "Recent in-store receipts.")
 
-	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+	add(s, needLogin, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		return client.GetReceipt(ctx, r.GetString("receipt_id", ""))
 	}, "ah_get_receipt", "Full detail of one receipt.",
 		str("receipt_id", "Receipt id from ah_get_receipts", true))

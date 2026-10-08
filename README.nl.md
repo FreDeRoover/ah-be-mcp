@@ -16,6 +16,8 @@ Probeer daarna: "Wat zit er in mijn winkelmandje?" of "Welke kip zit er deze wee
 
 Claude kan producten zoeken, de bonus bekijken, je winkelmandje aanpassen of leegmaken en je bestellingen en kassabonnen tonen. Er wordt nooit iets besteld of betaald. Dat doe je zelf op ah.be.
 
+Om te updaten vraag je Claude: "Is er een nieuwe versie van de Albert Heijn-koppeling?" Download dan de nieuwe `.mcpb` en dubbelklik erop. Je login blijft behouden.
+
 ## Privacy
 
 Alles draait op je eigen computer, er is geen server van ons. Je inlog staat lokaal en alleen jij kunt hem lezen. Zeg "Log uit bij Albert Heijn" om hem te wissen. Wat je opvraagt, zoals je winkelmandje of kassabonnen, wordt onderdeel van het gesprek met Claude.

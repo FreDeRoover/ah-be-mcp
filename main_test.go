@@ -343,3 +343,72 @@ func TestSearchOutputIsCompact(t *testing.T) {
 		t.Errorf("image data leaked into search output: %s", text)
 	}
 }
+
+func TestNewer(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"0.2.1", "0.2.0", true},
+		{"0.10.0", "0.9.0", true}, // numeric, not string, comparison
+		{"1.0.0", "0.99.99", true},
+		{"0.2.0", "0.2.0", false},
+		{"0.2.0", "0.2.1", false},
+		{"0.2.1", "0.2", true},
+		{"abc", "0.2.0", false},
+		{"0.3.0-rc1", "0.2.0", false}, // pre-release tags are never offered
+	} {
+		if got := newer(c.a, c.b); got != c.want {
+			t.Errorf("newer(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestCheckUpdate(t *testing.T) {
+	status := http.StatusOK
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		io.WriteString(w, `{"tag_name":"v0.3.0","html_url":"https://example.test/release"}`)
+	}))
+	defer gh.Close()
+	oldURL, oldVersion := releaseURL, version
+	defer func() { releaseURL, version = oldURL, oldVersion }()
+	releaseURL = gh.URL
+
+	s, f := setup(t, false)
+	for _, c := range []struct {
+		current string
+		update  bool
+		msg     string
+	}{
+		{"0.2.1", true, "newer version"},
+		{"0.3.0", false, "up to date"},
+		{"0.4.0", false, "up to date"},
+		{"dev", false, "development build"},
+	} {
+		version = c.current
+		text, isErr := call(t, s, "ah_check_update", nil)
+		var out struct {
+			Current string `json:"current_version"`
+			Latest  string `json:"latest_version"`
+			Update  bool   `json:"update_available"`
+			URL     string `json:"release_url"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(text), &out); isErr || err != nil {
+			t.Fatalf("%s: %q isErr=%v err=%v", c.current, text, isErr, err)
+		}
+		if out.Update != c.update || out.Latest != "0.3.0" || out.Current != c.current ||
+			out.URL != "https://example.test/release" || !strings.Contains(out.Message, c.msg) {
+			t.Errorf("current %s: %+v", c.current, out)
+		}
+	}
+	if f.hits != 0 {
+		t.Errorf("update check must not call AH (hits=%d)", f.hits)
+	}
+
+	status = http.StatusInternalServerError
+	if text, isErr := call(t, s, "ah_check_update", nil); !isErr || !strings.Contains(text, "GitHub") {
+		t.Errorf("want a GitHub error, got %q isErr=%v", text, isErr)
+	}
+}

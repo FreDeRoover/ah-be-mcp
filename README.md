@@ -22,6 +22,8 @@ claude mcp add ah-be -- /absolute/path/to/ah-be-mcp
 { "mcpServers": { "ah-be": { "command": "/absolute/path/to/ah-be-mcp" } } }
 ```
 
+To update, ask your assistant to run `ah_check_update`, then download the new `.mcpb` and double-click it. Your login is kept. It only checks GitHub and installs nothing.
+
 ## Log in
 
 Searching products and the bonus works without an account. For your winkelmandje, orders, receipts and profile, ask your assistant to call `ah_login`. It opens ah.be in your browser and waits up to 5 minutes. You type your password on ah.be only, so neither this server nor your assistant sees it.
@@ -32,7 +34,7 @@ Nothing leaves your computer except calls to AH, and what the tools return becom
 
 ## Tools
 
-`ah_login`, `ah_logout`, `ah_get_member`, `ah_search_products`, `ah_get_product`, `ah_get_products`, `ah_get_bonus`, `ah_get_bonus_group`, `ah_get_bonus_periods`, `ah_get_personal_bonus`, `ah_get_cart`, `ah_set_cart_items`, `ah_clear_cart`, `ah_get_orders`, `ah_get_order_details`, `ah_get_receipts`, `ah_get_receipt`.
+`ah_login`, `ah_logout`, `ah_check_update`, `ah_get_member`, `ah_search_products`, `ah_get_product`, `ah_get_products`, `ah_get_bonus`, `ah_get_bonus_group`, `ah_get_bonus_periods`, `ah_get_personal_bonus`, `ah_get_cart`, `ah_set_cart_items`, `ah_clear_cart`, `ah_get_orders`, `ah_get_order_details`, `ah_get_receipts`, `ah_get_receipt`.
 
 On ah.be the winkelmandje (ah.be/mijnlijst) is the shopping list, not an online order, and the cart tools read and write that list.
 
