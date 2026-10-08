@@ -156,6 +156,57 @@ func patchCart(ctx context.Context, items []map[string]any) error {
 	return client.DoRequest(ctx, "PATCH", listPath, map[string]any{"items": items}, nil)
 }
 
+// cartItem turns {product_id | name, quantity} into the item shape PATCH wants.
+func cartItem(ctx context.Context, spec map[string]any) (map[string]any, error) {
+	qty := 1
+	if v, ok := spec["quantity"].(float64); ok {
+		qty = int(v)
+	}
+	it := map[string]any{"quantity": qty, "type": "SHOPPABLE", "originCode": "PRD", "strikeThrough": false}
+	if id, _ := spec["product_id"].(float64); id > 0 {
+		prod, err := client.GetProduct(ctx, int(id)) // the API wants the title as description
+		if err != nil {
+			return nil, fmt.Errorf("product %d: %w", int(id), err)
+		}
+		it["productId"], it["description"], it["searchTerm"] = int(id), prod.Title, prod.Title
+	} else if name, _ := spec["name"].(string); name != "" {
+		it["originCode"], it["description"] = "TXT", name
+	} else {
+		return nil, fmt.Errorf("each item needs a product_id or a name")
+	}
+	return it, nil
+}
+
+// productLine is a compact product view (no image URLs) for multi-product tools.
+type productLine struct {
+	ID         int                     `json:"product_id"`
+	Title      string                  `json:"title"`
+	Size       string                  `json:"size,omitempty"`
+	Price      float64                 `json:"price"`
+	Was        float64                 `json:"price_before_bonus,omitempty"`
+	Bonus      string                  `json:"bonus,omitempty"`
+	Segment    string                  `json:"bonus_segment_id,omitempty"` // expand with ah_get_bonus_group
+	NutriScore string                  `json:"nutriscore,omitempty"`
+	Nutrition  []appie.NutritionalInfo `json:"nutrition_per_100g,omitempty"`
+	Error      string                  `json:"error,omitempty"`
+}
+
+func lineOf(p appie.Product) productLine {
+	l := productLine{ID: p.ID, Title: p.Title, Size: p.UnitSize, Price: p.Price.Now, Segment: p.BonusSegmentID, NutriScore: p.NutriScore, Nutrition: p.NutritionalInfo}
+	if p.IsBonus {
+		l.Was, l.Bonus = p.Price.Was, p.BonusMechanism
+	}
+	return l
+}
+
+func linesOf(ps []appie.Product) []productLine {
+	out := make([]productLine, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, lineOf(p))
+	}
+	return out
+}
+
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "ah-mcp-be:", err)
 	os.Exit(1)
@@ -234,6 +285,51 @@ func registerTools(s *server.MCPServer) {
 	}, "ah_get_bonus_group", "Products in a bonus group.",
 		str("segment_id", "bonusSegmentId from ah_get_bonus", true))
 
+	add(s, false, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+		ids := r.GetIntSlice("product_ids", nil)
+		if len(ids) == 0 || len(ids) > 20 {
+			return nil, fmt.Errorf("give 1 to 20 product_ids")
+		}
+		out := make([]productLine, 0, len(ids))
+		for _, id := range ids { // ponytail: sequential, parallelise if 20 products ever feels slow
+			var p *appie.Product
+			var err error
+			if r.GetBool("nutrition", false) {
+				p, err = client.GetProductFull(ctx, id)
+			} else {
+				p, err = client.GetProduct(ctx, id)
+			}
+			if err != nil {
+				out = append(out, productLine{ID: id, Error: err.Error()})
+				continue
+			}
+			l := lineOf(*p)
+			l.ID = id
+			out = append(out, l)
+		}
+		return out, nil
+	}, "ah_get_products", "Details for up to 20 products at once. With nutrition=true each product includes its nutritional values per 100 g, handy for calculating calories and protein of a recipe.",
+		mcp.WithArray("product_ids", mcp.Required(), mcp.Description("Product ids"), mcp.WithNumberItems()),
+		mcp.WithBoolean("nutrition", mcp.Description("Include nutritional info")))
+
+	add(s, false, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+		periods, err := client.GetBonusPeriods(ctx)
+		out := make([]map[string]string, 0, len(periods))
+		for _, p := range periods {
+			out = append(out, map[string]string{"start_date": p.StartDate, "end_date": p.EndDate})
+		}
+		return out, err
+	}, "ah_get_bonus_periods", "Bonus weeks: the current one and, a few days ahead, next week (start_date and end_date). Use a start date with ah_get_personal_bonus.")
+
+	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
+		ps, err := client.GetPersonalBonus(ctx, r.GetString("start_date", ""))
+		if err != nil {
+			return nil, err
+		}
+		return linesOf(ps), nil
+	}, "ah_get_personal_bonus", "Your personal bonus offers (Bonus Box) for the current week, or for the week starting at start_date.",
+		str("start_date", "Week start from ah_get_bonus_periods, e.g. 2026-10-12. Empty means the current week.", false))
+
 	// --- cart: on ah.be the "winkelmandje" (/mijnlijst) is the v2 shopping list ---
 	add(s, true, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
 		items, err := getCart(ctx)
@@ -265,23 +361,35 @@ func registerTools(s *server.MCPServer) {
 	}, "ah_get_cart", "Your ah.be winkelmandje (ah.be/mijnlijst): products, quantities, prices and bonus.")
 
 	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
-		it := map[string]any{"quantity": r.GetInt("quantity", 1), "type": "SHOPPABLE", "originCode": "PRD", "strikeThrough": false}
-		if id := r.GetInt("product_id", 0); id > 0 {
-			prod, err := client.GetProduct(ctx, id) // the API wants the title as description
+		raw, _ := r.GetArguments()["items"].([]any)
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("items is empty")
+		}
+		items, seen := make([]map[string]any, 0, len(raw)), map[any]bool{}
+		for _, x := range raw {
+			spec, _ := x.(map[string]any)
+			it, err := cartItem(ctx, spec) // build everything first so a bad item sends nothing
 			if err != nil {
 				return nil, err
 			}
-			it["productId"], it["description"], it["searchTerm"] = id, prod.Title, prod.Title
-		} else if name := r.GetString("name", ""); name != "" {
-			it["originCode"], it["description"] = "TXT", name
-		} else {
-			return nil, fmt.Errorf("give product_id or name")
+			if id, ok := it["productId"]; ok {
+				if seen[id] {
+					return nil, fmt.Errorf("product %v appears twice", id)
+				}
+				seen[id] = true
+			}
+			items = append(items, it)
 		}
-		return "ok", patchCart(ctx, []map[string]any{it})
-	}, "ah_set_cart_item", "Add a product (product_id) or free-text item (name) to the winkelmandje, or change its quantity. Quantity 0 removes it.",
-		num("product_id", "Product id from ah_search_products", false),
-		str("name", "Free-text item when there is no product_id", false),
-		num("quantity", "Quantity, 0 removes (default 1)", false))
+		return fmt.Sprintf("ok, %d items", len(items)), patchCart(ctx, items)
+	}, "ah_set_cart_items", "Add products (product_id) or free-text items (name) to the winkelmandje, or change quantities, in one call. Quantity 0 removes an item.",
+		mcp.WithArray("items", mcp.Required(), mcp.Description("Items to add or change"), mcp.Items(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"product_id": map[string]any{"type": "number", "description": "Product id from ah_search_products"},
+				"name":       map[string]any{"type": "string", "description": "Free-text item when there is no product_id"},
+				"quantity":   map[string]any{"type": "number", "description": "Quantity, 0 removes (default 1)"},
+			},
+		})))
 
 	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
 		if r.GetString("confirm", "") != "yes" {

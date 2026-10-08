@@ -34,6 +34,8 @@ type fakeAH struct {
 	patches [][]map[string]any
 	anon    int
 	hits    int
+
+	personalQuery string
 }
 
 func (f *fakeAH) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,8 +55,17 @@ func (f *fakeAH) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&body)
 		f.patches = append(f.patches, body.Items)
 		io.WriteString(w, `{}`)
+	case r.URL.Path == "/mobile-services/product/detail/v4/fir/999":
+		http.NotFound(w, r)
 	case strings.HasPrefix(r.URL.Path, "/mobile-services/product/detail/v4/fir/"):
 		io.WriteString(w, `{"productCard":{"webshopId":54074,"title":"AH Komkommer"}}`)
+	case r.URL.Path == "/graphql":
+		io.WriteString(w, `{"data":{"product":{"id":54074,"tradeItem":{"nutritions":[{"nutrients":[{"type":"PROTEIN","name":"Eiwitten","value":"0.6 g"}]}]}}}}`)
+	case r.URL.Path == "/mobile-services/bonuspage/v3/metadata":
+		io.WriteString(w, `{"periods":[{"bonusStartDate":"2026-10-05","bonusEndDate":"2026-10-11"},{"bonusStartDate":"2026-10-12","bonusEndDate":"2026-10-18"}]}`)
+	case r.URL.Path == "/mobile-services/bonuspage/v1/personal":
+		f.personalQuery = r.URL.RawQuery
+		io.WriteString(w, `{"bonusGroupOrProducts":[{"bonusGroup":{"id":"338409","segmentDescription":"Kattenvoer","discountDescription":"25% KORTING"}}]}`)
 	case r.URL.Path == "/mobile-services/product/search/v2":
 		io.WriteString(w, `{"products":[{"webshopId":54074,"title":"AH Komkommer","currentPrice":0.99}],"page":{"totalElements":1}}`)
 	default:
@@ -192,34 +203,86 @@ func TestGetCart(t *testing.T) {
 	}
 }
 
-func TestSetCartItem(t *testing.T) {
+func TestSetCartItems(t *testing.T) {
 	s, f := setup(t, true)
 
-	// product: title is looked up and sent as description, quantity 0 passes through
-	for _, q := range []int{3, 0} {
-		if text, isErr := call(t, s, "ah_set_cart_item", map[string]any{"product_id": 54074, "quantity": q}); isErr {
-			t.Fatal(text)
-		}
-		it := f.patches[len(f.patches)-1][0]
-		if it["productId"] != float64(54074) || it["quantity"] != float64(q) ||
-			it["description"] != "AH Komkommer" || it["originCode"] != "PRD" || it["strikeThrough"] != false {
-			t.Errorf("quantity %d: bad PATCH item %v", q, it)
-		}
+	// one call, one PATCH: product (title looked up), free text, and quantity 0
+	text, isErr := call(t, s, "ah_set_cart_items", map[string]any{"items": []any{
+		map[string]any{"product_id": 54074, "quantity": 3},
+		map[string]any{"name": "wc-papier", "quantity": 2},
+		map[string]any{"product_id": 4164, "quantity": 0},
+	}})
+	if isErr || len(f.patches) != 1 || len(f.patches[0]) != 3 {
+		t.Fatalf("want one PATCH with 3 items: %q isErr=%v patches=%v", text, isErr, f.patches)
+	}
+	p, txt, zero := f.patches[0][0], f.patches[0][1], f.patches[0][2]
+	if p["productId"] != float64(54074) || p["quantity"] != float64(3) || p["description"] != "AH Komkommer" ||
+		p["originCode"] != "PRD" || p["strikeThrough"] != false {
+		t.Errorf("bad product item %v", p)
+	}
+	if txt["originCode"] != "TXT" || txt["description"] != "wc-papier" || txt["quantity"] != float64(2) {
+		t.Errorf("bad free-text item %v", txt)
+	}
+	if zero["quantity"] != float64(0) {
+		t.Errorf("quantity 0 not passed through: %v", zero)
 	}
 
-	// free text
-	if text, isErr := call(t, s, "ah_set_cart_item", map[string]any{"name": "wc-papier", "quantity": 2}); isErr {
+	// invalid batches send nothing, even when only one item is bad
+	for name, items := range map[string][]any{
+		"empty":     {},
+		"no id":     {map[string]any{"product_id": 54074}, map[string]any{"quantity": 1}},
+		"duplicate": {map[string]any{"product_id": 54074}, map[string]any{"product_id": 54074}},
+		"unknown":   {map[string]any{"product_id": 54074}, map[string]any{"product_id": 999}},
+	} {
+		n := len(f.patches)
+		if _, isErr := call(t, s, "ah_set_cart_items", map[string]any{"items": items}); !isErr || len(f.patches) != n {
+			t.Errorf("%s: expected an error and no PATCH", name)
+		}
+	}
+}
+
+func TestGetProducts(t *testing.T) {
+	s, _ := setup(t, false)
+	text, isErr := call(t, s, "ah_get_products", map[string]any{"product_ids": []any{54074, 999}, "nutrition": true})
+	if isErr {
 		t.Fatal(text)
 	}
-	it := f.patches[len(f.patches)-1][0]
-	if it["originCode"] != "TXT" || it["description"] != "wc-papier" || it["quantity"] != float64(2) {
-		t.Errorf("bad free-text item %v", it)
+	var out []struct {
+		ID        int                            `json:"product_id"`
+		Title     string                         `json:"title"`
+		Error     string                         `json:"error"`
+		Nutrition []struct{ Name, Value string } `json:"nutrition_per_100g"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil || len(out) != 2 {
+		t.Fatalf("bad output %q: %v", text, err)
+	}
+	if out[0].ID != 54074 || out[0].Title != "AH Komkommer" || len(out[0].Nutrition) != 1 || out[0].Nutrition[0].Value != "0.6 g" {
+		t.Errorf("first product wrong: %+v", out[0])
+	}
+	if out[1].ID != 999 || out[1].Error == "" { // one bad id must not sink the batch
+		t.Errorf("second product should carry an error: %+v", out[1])
+	}
+	if _, isErr := call(t, s, "ah_get_products", map[string]any{"product_ids": []any{}}); !isErr {
+		t.Error("empty product_ids should error")
+	}
+}
+
+func TestBonusPeriodsAndPersonalBonus(t *testing.T) {
+	s, f := setup(t, false)
+	text, isErr := call(t, s, "ah_get_bonus_periods", nil)
+	if isErr || !strings.Contains(text, `"start_date":"2026-10-12"`) {
+		t.Fatalf("periods: %q isErr=%v", text, isErr)
+	}
+	// personal bonus is member-specific: anonymous sessions are refused
+	if text, isErr := call(t, s, "ah_get_personal_bonus", nil); !isErr || !strings.Contains(text, "ah_login") {
+		t.Fatalf("anonymous personal bonus: %q", text)
 	}
 
-	// neither product_id nor name
-	n := len(f.patches)
-	if _, isErr := call(t, s, "ah_set_cart_item", map[string]any{"quantity": 1}); !isErr || len(f.patches) != n {
-		t.Error("expected an error and no PATCH when product_id and name are missing")
+	s, f = setup(t, true)
+	text, isErr = call(t, s, "ah_get_personal_bonus", map[string]any{"start_date": "2026-10-12"})
+	if isErr || f.personalQuery != "bonusStartDate=2026-10-12" ||
+		!strings.Contains(text, `"bonus_segment_id":"338409"`) || !strings.Contains(text, "25% KORTING") {
+		t.Fatalf("personal bonus: %q query=%q isErr=%v", text, f.personalQuery, isErr)
 	}
 }
 

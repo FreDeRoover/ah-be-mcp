@@ -28,11 +28,11 @@ Searching products and the bonus works without an account. For your winkelmandje
 
 Tokens are saved in your user config directory as `ah-mcp-be/tokens.json`, readable by you only. Set `AH_BE_TOKENS_PATH` to use another file. `ah_logout` deletes them. Anyone who can read that file can act as you on ah.be.
 
-Nothing leaves your computer except calls to AH, and what the tools return becomes part of your conversation with the assistant. `ah_set_cart_item` and `ah_clear_cart` change your real winkelmandje. Nothing here places or pays for an order.
+Nothing leaves your computer except calls to AH, and what the tools return becomes part of your conversation with the assistant. `ah_set_cart_items` and `ah_clear_cart` change your real winkelmandje. Nothing here places or pays for an order.
 
 ## Tools
 
-`ah_login`, `ah_logout`, `ah_get_member`, `ah_search_products`, `ah_get_product`, `ah_get_bonus`, `ah_get_bonus_group`, `ah_get_cart`, `ah_set_cart_item`, `ah_clear_cart`, `ah_get_orders`, `ah_get_order_details`, `ah_get_receipts`, `ah_get_receipt`.
+`ah_login`, `ah_logout`, `ah_get_member`, `ah_search_products`, `ah_get_product`, `ah_get_products`, `ah_get_bonus`, `ah_get_bonus_group`, `ah_get_bonus_periods`, `ah_get_personal_bonus`, `ah_get_cart`, `ah_set_cart_items`, `ah_clear_cart`, `ah_get_orders`, `ah_get_order_details`, `ah_get_receipts`, `ah_get_receipt`.
 
 On ah.be the winkelmandje (ah.be/mijnlijst) is the shopping list, not an online order, and the cart tools read and write that list.
 
@@ -45,4 +45,4 @@ On ah.be the winkelmandje (ah.be/mijnlijst) is the shopping list, not an online 
 ## Limitations
 
 - There is no store search. The mobile API only knows Dutch stores, even for Belgian postal codes.
-- Tested on macOS against a real account: search, bonus and every winkelmandje action. Not tested: free-text items, orders, receipts, and anything on Windows or Linux.
+- Tested on macOS against a real account: search, bonus, personal bonus and every winkelmandje action, free-text items included. Not tested: orders, receipts, and anything on Windows or Linux.
