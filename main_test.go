@@ -67,7 +67,7 @@ func (f *fakeAH) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.personalQuery = r.URL.RawQuery
 		io.WriteString(w, `{"bonusGroupOrProducts":[{"bonusGroup":{"id":"338409","segmentDescription":"Kattenvoer","discountDescription":"25% KORTING"}}]}`)
 	case r.URL.Path == "/mobile-services/product/search/v2":
-		io.WriteString(w, `{"products":[{"webshopId":54074,"title":"AH Komkommer","currentPrice":0.99}],"page":{"totalElements":1}}`)
+		io.WriteString(w, `{"products":[{"webshopId":54074,"title":"AH Komkommer","currentPrice":0.99,"priceBeforeBonus":1.29,"isBonus":true,"bonusMechanism":"25% KORTING","unitPriceDescription":"per stuk","images":[{"url":"https://x/img.png","width":800,"height":800}]}],"page":{"totalElements":1}}`)
 	default:
 		http.NotFound(w, r)
 	}
@@ -321,5 +321,25 @@ func TestAPIErrorBecomesToolError(t *testing.T) {
 	client = appie.New(appie.WithBaseURL(srv.URL), appie.WithTokens("a", "r"))
 	if text, isErr := call(t, s, "ah_get_cart", nil); !isErr || text == "" {
 		t.Fatalf("want tool error, got %q isErr=%v", text, isErr)
+	}
+}
+
+func TestSearchOutputIsCompact(t *testing.T) {
+	s, _ := setup(t, false)
+	text, isErr := call(t, s, "ah_search_products", map[string]any{"query": "komkommer"})
+	if isErr {
+		t.Fatal(text)
+	}
+	var out []map[string]any
+	if err := json.Unmarshal([]byte(text), &out); err != nil || len(out) != 1 {
+		t.Fatalf("bad output %q: %v", text, err)
+	}
+	p := out[0]
+	if p["product_id"] != float64(54074) || p["price"] != 0.99 || p["price_before_bonus"] != 1.29 ||
+		p["bonus"] != "25% KORTING" || p["unit_price"] != "per stuk" {
+		t.Errorf("wrong fields: %v", p)
+	}
+	if strings.Contains(text, "img.png") || strings.Contains(text, "images") {
+		t.Errorf("image data leaked into search output: %s", text)
 	}
 }

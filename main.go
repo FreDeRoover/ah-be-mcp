@@ -182,6 +182,7 @@ type productLine struct {
 	ID         int                     `json:"product_id"`
 	Title      string                  `json:"title"`
 	Size       string                  `json:"size,omitempty"`
+	UnitPrice  string                  `json:"unit_price,omitempty"`
 	Price      float64                 `json:"price"`
 	Was        float64                 `json:"price_before_bonus,omitempty"`
 	Bonus      string                  `json:"bonus,omitempty"`
@@ -192,19 +193,23 @@ type productLine struct {
 }
 
 func lineOf(p appie.Product) productLine {
-	l := productLine{ID: p.ID, Title: p.Title, Size: p.UnitSize, Price: p.Price.Now, Segment: p.BonusSegmentID, NutriScore: p.NutriScore, Nutrition: p.NutritionalInfo}
+	l := productLine{ID: p.ID, Title: p.Title, Size: p.UnitSize, UnitPrice: p.UnitPriceDescription, Price: p.Price.Now, Segment: p.BonusSegmentID, NutriScore: p.NutriScore, Nutrition: p.NutritionalInfo}
 	if p.IsBonus {
 		l.Was, l.Bonus = p.Price.Was, p.BonusMechanism
 	}
 	return l
 }
 
-func linesOf(ps []appie.Product) []productLine {
+// productsOut compacts a product list returned by appie-go, passing errors through.
+func productsOut(ps []appie.Product, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
 	out := make([]productLine, 0, len(ps))
 	for _, p := range ps {
 		out = append(out, lineOf(p))
 	}
-	return out
+	return out, nil
 }
 
 func fatal(err error) {
@@ -253,11 +258,11 @@ func registerTools(s *server.MCPServer) {
 
 	// --- products (work anonymously) ---
 	add(s, false, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
-		return client.SearchProductsFiltered(ctx, appie.SearchOptions{
+		return productsOut(client.SearchProductsFiltered(ctx, appie.SearchOptions{
 			Query: r.GetString("query", ""),
 			Limit: r.GetInt("limit", 10),
 			Bonus: r.GetBool("bonus_only", false),
-		})
+		}))
 	}, "ah_search_products", "Search ah.be products (Dutch terms work best). Returns id, title, price, bonus info.",
 		str("query", "Search term, e.g. 'melk'", true),
 		num("limit", "Max results (default 10)", false),
@@ -277,11 +282,11 @@ func registerTools(s *server.MCPServer) {
 		mcp.WithBoolean("nutrition", mcp.Description("Include nutritional info")))
 
 	add(s, false, func(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
-		return client.GetBonusProducts(ctx)
+		return productsOut(client.GetBonusProducts(ctx))
 	}, "ah_get_bonus", "Current bonus offers. Group entries carry a bonusSegmentId; expand with ah_get_bonus_group.")
 
 	add(s, false, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
-		return client.GetBonusGroupProducts(ctx, r.GetString("segment_id", ""))
+		return productsOut(client.GetBonusGroupProducts(ctx, r.GetString("segment_id", "")))
 	}, "ah_get_bonus_group", "Products in a bonus group.",
 		str("segment_id", "bonusSegmentId from ah_get_bonus", true))
 
@@ -322,11 +327,7 @@ func registerTools(s *server.MCPServer) {
 	}, "ah_get_bonus_periods", "Bonus weeks: the current one and, a few days ahead, next week (start_date and end_date). Use a start date with ah_get_personal_bonus.")
 
 	add(s, true, func(ctx context.Context, r mcp.CallToolRequest) (any, error) {
-		ps, err := client.GetPersonalBonus(ctx, r.GetString("start_date", ""))
-		if err != nil {
-			return nil, err
-		}
-		return linesOf(ps), nil
+		return productsOut(client.GetPersonalBonus(ctx, r.GetString("start_date", "")))
 	}, "ah_get_personal_bonus", "Your personal bonus offers (Bonus Box) for the current week, or for the week starting at start_date.",
 		str("start_date", "Week start from ah_get_bonus_periods, e.g. 2026-10-12. Empty means the current week.", false))
 
