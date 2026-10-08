@@ -8,6 +8,15 @@ Nederlandse uitleg: [README.nl.md](README.nl.md).
 
 A thin wrapper around [appie-go](https://github.com/gwillem/appie-go) (`WithSite("be")`), with a tool set modelled on [ah-mcp](https://github.com/mrserzhan/ah-mcp). Licensed AGPL-3.0, like both.
 
+## Compatibility
+
+| Client | Works? |
+|---|---|
+| Claude Desktop on macOS and Windows | Yes, one-click `.mcpb` install |
+| Claude Code, Codex CLI, Cursor, other local stdio MCP clients | Yes, with the binary |
+| ChatGPT (web, desktop, Chromebook) | **No.** ChatGPT only connects to remote https MCP servers, not to a program on your own computer. There is no hosted version of this server. |
+| Chromebook | **No** for Claude (no Claude Desktop on ChromeOS) and ChatGPT (see above). Technical users can run the Linux binary in the Chromebook's Linux environment with a terminal MCP client such as Claude Code or Codex CLI (untested). |
+
 ## Install
 
 ### Claude Desktop (one click)
@@ -83,7 +92,7 @@ On ah.be the winkelmandje is the shopping list, not an online order, so the cart
 
 ## Limitations
 
-- Local use only (stdio, browser login). No SSE/HTTP transport, so ChatGPT's web connectors can't use it.
+- Local use only (stdio, browser login). No SSE/HTTP transport and no hosted version, so ChatGPT's connectors can't use it. OpenAI's [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) could in theory bridge a local stdio server to ChatGPT, but it needs an OpenAI API account and an always-on computer; untested here.
 - No store search: the mobile API only knows Dutch stores, even for Belgian postal codes.
 - Tested against a real account on macOS: search, bonus, winkelmandje read/add/change/remove/clear. **Not yet tested:** free-text items, orders and receipts, and everything on Windows and Linux (including opening the login page on Windows).
 - Not included compared to ah-mcp: vandaag-af bargains, reopening or editing submitted orders, favourite-list editing.

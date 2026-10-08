@@ -4,6 +4,12 @@ Laat Claude voor je zoeken op ah.be, de bonus bekijken en je winkelmandje behere
 
 > **Onofficieel.** Dit project heeft niets te maken met Albert Heijn. Het gebruikt dezelfde verborgen koppeling als de AH-app. AH kan die op elk moment wijzigen of blokkeren. Gebruik op eigen risico.
 
+## Werkt het bij jou?
+
+- **Claude Desktop op Mac of Windows:** ja, met één klik.
+- **ChatGPT:** nee. ChatGPT kan alleen praten met programma's op het internet, niet met een programma op je eigen computer. Er is geen gehoste versie van dit project.
+- **Chromebook:** nee. Er is geen Claude Desktop voor Chromebook, en ChatGPT werkt hier dus ook niet mee.
+
 ## Installeren in Claude Desktop
 
 1. Ga naar de [nieuwste release](https://github.com/FreDeRoover/ah-be-mcp/releases/latest) en download het `.mcpb`-bestand voor jouw computer:
